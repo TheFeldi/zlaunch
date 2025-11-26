@@ -2,9 +2,11 @@ use crate::ipc::commands::{Command, Response};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::sync::Arc;
 
+/// IPC server that listens for commands from external clients.
 pub struct IpcServer {
-    listener: UnixListener,
+    listener: Arc<UnixListener>,
     socket_path: PathBuf,
 }
 
@@ -20,16 +22,23 @@ impl IpcServer {
         }
 
         let listener = UnixListener::bind(&socket_path)?;
-        listener.set_nonblocking(true)?;
+        // Keep in blocking mode for accept_blocking()
 
         Ok(Self {
-            listener,
+            listener: Arc::new(listener),
             socket_path,
         })
     }
 
-    pub fn poll_command(&self) -> Option<Command> {
-        match self.listener.accept() {
+    /// Get a clone of the listener Arc for use in background threads.
+    pub fn listener(&self) -> Arc<UnixListener> {
+        Arc::clone(&self.listener)
+    }
+
+    /// Blocking accept - waits for a connection and returns the command.
+    /// This should be called from a background thread.
+    pub fn accept_blocking(listener: &UnixListener) -> Option<Command> {
+        match listener.accept() {
             Ok((mut stream, _)) => {
                 let mut buf = [0u8; 1024];
                 let n = stream.read(&mut buf).ok()?;

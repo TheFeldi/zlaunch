@@ -7857,6 +7857,7 @@ dependencies = [
  "anyhow",
  "clap",
  "dirs 5.0.1",
+ "flume",
  "freedesktop-desktop-entry",
  "freedesktop-icons",
  "fuzzy-matcher",

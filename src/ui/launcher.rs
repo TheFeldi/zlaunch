@@ -1,8 +1,10 @@
-use crate::desktop::DesktopEntry;
-use crate::ui::app_list::AppListDelegate;
+use crate::desktop::launch_application;
+use crate::items::{ApplicationItem, ListItem};
+use crate::ui::items::ItemListDelegate;
+use crate::ui::theme::theme;
 use gpui::{
     App, AsyncApp, Context, Entity, FocusHandle, Focusable, KeyBinding, ScrollStrategy, Task,
-    WeakEntity, Window, actions, div, image_cache, prelude::*, retain_all, rgba,
+    WeakEntity, Window, actions, div, image_cache, prelude::*, retain_all,
 };
 use gpui_component::IndexPath;
 use gpui_component::input::{Input, InputState};
@@ -21,21 +23,53 @@ pub fn init(cx: &mut App) {
 }
 
 pub struct LauncherView {
-    list_state: Entity<ListState<AppListDelegate>>,
+    list_state: Entity<ListState<ItemListDelegate>>,
     input_state: Entity<InputState>,
     focus_handle: FocusHandle,
+    #[allow(dead_code)] // Kept alive for blur handler
+    on_hide: std::sync::Arc<dyn Fn() + Send + Sync>,
     _search_task: Task<()>,
 }
 
 impl LauncherView {
     pub fn new(
-        entries: Vec<DesktopEntry>,
+        applications: Vec<ApplicationItem>,
         on_hide: impl Fn() + Send + Sync + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut delegate = AppListDelegate::new(entries);
-        delegate.set_on_hide(on_hide);
+        // Convert applications to ListItems
+        let items: Vec<ListItem> = applications
+            .into_iter()
+            .map(ListItem::Application)
+            .collect();
+
+        let mut delegate = ItemListDelegate::new(items);
+
+        // Set up callbacks using Arc for sharing
+        let on_hide = std::sync::Arc::new(on_hide);
+        let on_hide_for_confirm = on_hide.clone();
+        let on_hide_for_cancel = on_hide.clone();
+
+        delegate.set_on_confirm(move |item| {
+            if let ListItem::Application(app) = item {
+                // Convert back to DesktopEntry for launching
+                let entry = crate::desktop::DesktopEntry::new(
+                    app.id.clone(),
+                    app.name.clone(),
+                    app.exec.clone(),
+                    None,
+                    app.icon_path.clone(),
+                    app.description.clone(),
+                    vec![],
+                    app.terminal,
+                    app.desktop_path.clone(),
+                );
+                let _ = launch_application(&entry);
+            }
+            on_hide_for_confirm();
+        });
+        delegate.set_on_cancel(move || on_hide_for_cancel());
 
         let list_state = cx.new(|cx| ListState::new(delegate, window, cx));
 
@@ -53,10 +87,18 @@ impl LauncherView {
 
         let focus_handle = cx.focus_handle();
 
+        // Hide when the view loses focus (user clicked outside the window)
+        let on_hide_for_blur = on_hide.clone();
+        cx.on_blur(&focus_handle, window, move |_this, _window, _cx| {
+            on_hide_for_blur();
+        })
+        .detach();
+
         Self {
             list_state,
             input_state,
             focus_handle,
+            on_hide,
             _search_task: Task::ready(()),
         }
     }
@@ -79,11 +121,11 @@ impl LauncherView {
     fn async_search(
         &mut self,
         query: String,
-        list_state: Entity<ListState<AppListDelegate>>,
+        list_state: Entity<ListState<ItemListDelegate>>,
         cx: &mut Context<Self>,
     ) {
-        // Get entries Arc for background processing
-        let entries = list_state.read(cx).delegate().entries();
+        // Get items Arc for background processing
+        let items = list_state.read(cx).delegate().items();
         let query_clone = query.clone();
 
         // Update query immediately (without filtering)
@@ -96,7 +138,7 @@ impl LauncherView {
         self._search_task = cx.spawn(async move |_this: WeakEntity<Self>, cx: &mut AsyncApp| {
             // Run filtering on background thread
             let filtered_indices = background
-                .spawn(async move { AppListDelegate::filter_entries_sync(&entries, &query_clone) })
+                .spawn(async move { ItemListDelegate::filter_items_sync(&items, &query_clone) })
                 .await;
 
             // Apply results on main thread
@@ -162,10 +204,12 @@ impl Focusable for LauncherView {
 
 impl gpui::Render for LauncherView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let bg_color = rgba(0x0f0f0fB3); // ~70% opaque for visible background blur
+        let t = theme();
 
+        // Fullscreen backdrop - clicking it closes the launcher
+        let on_hide = self.on_hide.clone();
         div()
-            .id("launcher-view")
+            .id("launcher-backdrop")
             .key_context("LauncherView")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::select_next))
@@ -174,38 +218,56 @@ impl gpui::Render for LauncherView {
             .on_action(cx.listener(Self::cancel))
             .size_full()
             .flex()
-            .flex_col()
-            .bg(bg_color)
-            .rounded_xl()
-            .border_1()
-            .border_color(rgba(0xffffff18))
-            .overflow_hidden()
-            // Search input section
+            .items_center()
+            .justify_center()
+            // Click on backdrop to close
+            .on_mouse_down(gpui::MouseButton::Left, move |_event, _window, _cx| {
+                on_hide();
+            })
+            // Centered launcher panel
             .child(
                 div()
-                    .w_full()
-                    .px_2()
-                    .py_3()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        Input::new(&self.input_state)
-                            .appearance(false)
-                            .cleanable(true)
-                            .prefix(
-                                Icon::new(IconName::Search)
-                                    .text_color(cx.theme().muted_foreground)
-                                    .mr_2(),
-                            ),
-                    ),
-            )
-            // List section with image caching
-            .child(
-                image_cache(retain_all("app-icons"))
-                    .flex_1()
+                    .id("launcher-panel")
+                    .w(t.window_width)
+                    .h(t.window_height)
+                    .flex()
+                    .flex_col()
+                    .bg(t.window_background)
+                    .rounded(t.window_border_radius)
+                    .border_1()
+                    .border_color(t.window_border)
                     .overflow_hidden()
-                    .py_2()
-                    .child(List::new(&self.list_state)),
+                    // Stop click propagation to backdrop
+                    .on_mouse_down(gpui::MouseButton::Left, |_event, _window, _cx| {
+                        // Do nothing - just stop propagation
+                    })
+                    // Search input section
+                    .child(
+                        div()
+                            .w_full()
+                            .px_2()
+                            .py_3()
+                            .border_b_1()
+                            .border_color(cx.theme().border)
+                            .child(
+                                Input::new(&self.input_state)
+                                    .appearance(false)
+                                    .cleanable(true)
+                                    .prefix(
+                                        Icon::new(IconName::Search)
+                                            .text_color(cx.theme().muted_foreground)
+                                            .mr_2(),
+                                    ),
+                            ),
+                    )
+                    // List section with image caching
+                    .child(
+                        image_cache(retain_all("app-icons"))
+                            .flex_1()
+                            .overflow_hidden()
+                            .py_2()
+                            .child(List::new(&self.list_state)),
+                    ),
             )
     }
 }
