@@ -4,10 +4,10 @@ use crate::items::{ApplicationItem, ListItem, WindowItem};
 use crate::ui::LauncherView;
 use gpui::{
     App, AppContext, Bounds, WindowBackgroundAppearance, WindowBounds, WindowDecorations,
-    WindowHandle, WindowKind, WindowOptions,
-    layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions},
-    point, px, size,
+    WindowHandle, WindowKind, WindowOptions, point, px, size,
 };
+#[cfg(target_os = "linux")]
+use gpui::layer_shell::{Anchor, KeyboardInteractivity, Layer, LayerShellOptions};
 use gpui_component::Root;
 use std::sync::Arc;
 use tracing::warn;
@@ -41,6 +41,20 @@ pub fn create_and_show_window(
         size: display_size,
     };
 
+    #[cfg(target_os = "linux")]
+    let window_kind = WindowKind::LayerShell(LayerShellOptions {
+        namespace: "zlaunch".to_string(),
+        layer: Layer::Overlay,
+        // Anchor to all edges = fullscreen overlay
+        anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
+        // Exclusive keyboard so typing works immediately
+        keyboard_interactivity: KeyboardInteractivity::Exclusive,
+        ..Default::default()
+    });
+
+    #[cfg(not(target_os = "linux"))]
+    let window_kind = WindowKind::PopUp;
+
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(fullscreen_bounds)),
         titlebar: None,
@@ -49,15 +63,7 @@ pub fn create_and_show_window(
         app_id: Some("zlaunch".to_string()),
         window_background: WindowBackgroundAppearance::Transparent,
         window_decorations: Some(WindowDecorations::Server),
-        kind: WindowKind::LayerShell(LayerShellOptions {
-            namespace: "zlaunch".to_string(),
-            layer: Layer::Overlay,
-            // Anchor to all edges = fullscreen overlay
-            anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
-            // Exclusive keyboard so typing works immediately
-            keyboard_interactivity: KeyboardInteractivity::Exclusive,
-            ..Default::default()
-        }),
+        kind: window_kind,
         ..Default::default()
     };
 

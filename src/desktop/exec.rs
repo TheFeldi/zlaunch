@@ -1,4 +1,5 @@
 use crate::desktop::entry::DesktopEntry;
+#[cfg(unix)]
 use crate::desktop::env::get_session_environment;
 use std::process::Command;
 
