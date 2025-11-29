@@ -8,7 +8,9 @@ use super::hyprland::HyprlandCompositor;
 #[cfg(unix)]
 use super::kwin::KwinCompositor;
 
-use tracing::{info, warn};
+use tracing::info;
+#[cfg(unix)]
+use tracing::warn;
 
 /// Detect and create the appropriate compositor client.
 ///
